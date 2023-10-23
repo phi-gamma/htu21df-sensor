@@ -1,4 +1,5 @@
 #![allow(unused)]
+#![deny(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
 
 /*!
@@ -84,3 +85,24 @@ where I2C: Read<Error = E> + Write<Error = E>
         Ok(())
     }
 }
+
+/** 16 bits of temperature; cf. p. 15 of the datasheet. */
+#[inline(always)]
+fn calc_temperature(lo: u8, hi: u8) -> f32
+{
+    let sigout = (hi as u16) << 8u16 | (lo as u16 & 0xfc_u16);
+
+    /* Temp = -46.85 + 175.72 (S_Temp/2^16) */
+    0.002681274_f32 * (sigout as f32) - 46.85_f32
+}
+
+/** 12 bits of humidity; cf. p. 15 of the datasheet. */
+#[inline(always)]
+fn calc_relative_humidity(lo: u8, hi: u8) -> f32
+{
+    let sigout = (hi as u16) << 8u16 | (lo as u16 & 0xf0_u16);
+
+    /* RH = -6 + 125 (S_RH/2^16) */
+    0.001907349_f32 * (sigout as f32) - 6.0_f32
+}
+
