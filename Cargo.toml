@@ -1,8 +1,12 @@
 [package]
-name            = "htu21df-sensor"
-version         = "0.13.37"
-authors         = ["Philipp Gesang <phg@phi-gamma.net>"]
-edition         = "2021"
-license         = "GPLv3.0"
+name                    = "htu21df-sensor"
+version                 = "0.13.37"
+authors                 = ["Philipp Gesang <phg@phi-gamma.net>"]
+edition                 = "2021"
+license                 = "GPLv3.0"
 
 [dependencies]
+embedded-hal            = "*"
+
+[dev-dependencies]
+embedded-hal-mock       = "*"
