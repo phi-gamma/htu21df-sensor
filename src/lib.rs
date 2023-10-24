@@ -44,6 +44,9 @@ mod constants
 
     /** wait for sensor to become ready */
     pub const POWERUP_DELAY_MS: u8 = 15;
+
+    /** The checksum uses a 9-bit polynomial of 2^8 + 2^5 + 2^4 + 1. */
+    pub const CRC8_POLY: u32 = 0b100110001;
 }
 
 #[derive(Debug)]
@@ -106,3 +109,60 @@ fn calc_relative_humidity(lo: u8, hi: u8) -> f32
     0.001907349_f32 * (sigout as f32) - 6.0_f32
 }
 
+/**
+ * Compute 8-bit CRC using a 9 bit polynomial.
+ *
+ * Datasheet p. 14. (The description reads suspiciously similar to
+ * that on the Wikipedia page:
+ * https://en.wikipedia.org/wiki/Cyclic_redundancy_check#Computation )
+ */
+#[inline]
+const fn calc_crc(hi: u8, lo: u8) -> u8
+{
+    let mut crc: u32 = (hi as u32) << 16 | (lo as u32) << 8;
+    let mut div: u32 = constants::CRC8_POLY << 15;
+
+    let mut b = 24usize;
+    while b != 8 {
+        b -= 1;
+        if ((crc & (1 << b)) != 0) {
+            crc ^= div;
+        }
+        div >>= 1;
+    }
+
+    /* The eight bits left on the right are the CRC. */
+    (crc & 0xff) as u8
+}
+
+#[cfg(test)]
+mod tests
+{
+    use super::*;
+
+    /** Page 15 in datasheet. */
+    #[test]
+    fn crc()
+    {
+        assert_eq!(calc_crc(0b00000000u8, 0b11011100u8), 0b01111001u8);
+        assert_eq!(calc_crc(0b01101000u8, 0b00111010u8), 0b01111100u8);
+        assert_eq!(calc_crc(0b01001110u8, 0b10000101u8), 0b01101011u8);
+    }
+
+    /** Page 15 in datasheet. */
+    #[test]
+    fn humidity()
+    {
+        /* 0x7c80 ⇒ 54.8 %RH */
+        assert_eq!(calc_relative_humidity(0x80, 0x7c), 54.791027);
+        /* 0x4e85 ⇒ 32.3 %RH */
+        assert_eq!(calc_relative_humidity(0x85, 0x4e), 32.330086);
+    }
+
+    /** Page 15 in datasheet. */
+    fn temp()
+    {
+        /* 0x683a ⇒ 24.7 °C */
+        assert_eq!(calc_temperature(0x3a, 0x68), 24.7);
+    }
+}
