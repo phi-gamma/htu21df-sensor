@@ -21,19 +21,19 @@ mod constants
     pub const I2C_ADDR: u8 = 0x40;
 
     /** HTU21D no-hold temperature register */
-    pub const I2C_TEMP: u8 = 0xf3;
+    pub const I2C_COMMAND_TEMPERATURE: u8 = 0xf3;
 
     /** HTU21D no-hold humidity register */
-    pub const I2C_HUMI: u8 = 0xf5;
+    pub const I2C_COMMAND_HUMIDITY: u8 = 0xf5;
 
     /** power cycle the sensor */
-    pub static SOFT_RESET: [u8; 1] = [0xfe];
+    pub const SOFT_RESET: u8 = 0xfe;
 
     /** wait before reading temperature */
-    pub const TEMP_DELAY_MS: u8 = 50;
+    pub const TEMP_DELAY_MS: u16 = 50;
 
     /** wait before reading humidity */
-    pub const HUMI_DELAY_MS: u8 = 16;
+    pub const HUMI_DELAY_MS: u16 = 16;
 
     /**
      * Wait after resetting the sensor (power cycle and reinitialization).
@@ -55,20 +55,90 @@ pub struct Sensor<I2C>
     i2c: I2C,
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
+#[repr(u8)]
 enum Command
 {
-    Reset,
+    Reset = constants::SOFT_RESET,
 }
 
-impl Command
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct RawMeasurement
 {
-    fn as_bytes(&self) -> &'static [u8]
+    lo: u8,
+    hi: u8,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Measurement<Output, const D: u16, const C: u8>(Output);
+
+pub type Humidity = Measurement<
+    f32,
+    { constants::HUMI_DELAY_MS },
+    { constants::I2C_COMMAND_HUMIDITY },
+>;
+pub type Temperature = Measurement<
+    f32,
+    { constants::TEMP_DELAY_MS },
+    { constants::I2C_COMMAND_TEMPERATURE },
+>;
+
+impl<Output: Copy, const D: u16, const C: u8> Measurement<Output, D, C>
+{
+    const fn i2n_command(&self) -> u8 { C }
+
+    const fn delay_ms(&self) -> u16 { D }
+
+    pub const fn value(&self) -> Output { self.0 }
+}
+
+impl From<RawMeasurement> for u16
+{
+    fn from(RawMeasurement { lo, hi }: RawMeasurement) -> Self
     {
-        match self {
-            Command::Reset => &constants::SOFT_RESET,
+        (hi as u16) << 8 | (lo as u16 & 0xfc_u16)
+    }
+}
+
+impl From<RawMeasurement> for Temperature
+{
+    /** 16 bits of temperature; cf. p. 15 of the datasheet. */
+    fn from(raw: RawMeasurement) -> Self
+    {
+        let sigout: u16 = raw.into();
+
+        /* Temp = -46.85 + 175.72 (S_Temp/2^16) */
+        Self(0.002681274_f32 * (sigout as f32) - 46.85_f32)
+    }
+}
+
+impl From<RawMeasurement> for Humidity
+{
+    /** 12 bits of humidity; cf. p. 15 of the datasheet. */
+    fn from(raw: RawMeasurement) -> Self
+    {
+        let sigout: u16 = raw.into();
+
+        /* RH = -6 + 125 (S_RH/2^16) */
+        Self(0.001907349_f32 * (sigout as f32) - 6.0_f32)
+    }
+}
+
+impl From<Command> for u8
+{
+    fn from(cmd: Command) -> Self
+    {
+        match cmd {
+            Command::Reset => constants::SOFT_RESET,
         }
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Error<I2cError>
+{
+    I2c(I2cError),
+    Crc,
 }
 
 impl<I2C, E> Sensor<I2C>
@@ -76,37 +146,92 @@ where I2C: Read<Error = E> + Write<Error = E>
 {
     pub fn create(i2c: I2C) -> Self { Self { i2c } }
 
-    fn send_command(&mut self, cmd: Command) -> Result<(), E>
+    fn send_command<C: Into<u8>>(&mut self, cmd: C) -> Result<(), Error<E>>
     {
-        self.i2c.write(constants::I2C_ADDR, cmd.as_bytes())
+        let cmd: u8 = cmd.into();
+        self.i2c
+            .write(constants::I2C_ADDR, [cmd].as_slice())
+            .map_err(Error::I2c)
     }
 
-    pub fn reset(&mut self, delay: &mut impl DelayUs<u16>) -> Result<(), E>
+    pub fn reset(
+        &mut self,
+        delay: &mut impl DelayUs<u16>,
+    ) -> Result<(), Error<E>>
     {
         self.send_command(Command::Reset)?;
         delay.delay_us(constants::RESET_DELAY_MS * 1000);
         Ok(())
     }
-}
 
-/** 16 bits of temperature; cf. p. 15 of the datasheet. */
-#[inline(always)]
-fn calc_temperature(lo: u8, hi: u8) -> f32
-{
-    let sigout = (hi as u16) << 8u16 | (lo as u16 & 0xfc_u16);
+    pub fn measurement_result<M>(&mut self) -> Result<M, Error<E>>
+    where M: From<RawMeasurement>
+    {
+        let raw = self.raw_measurement_result()?;
+        Ok(raw.into())
+    }
 
-    /* Temp = -46.85 + 175.72 (S_Temp/2^16) */
-    0.002681274_f32 * (sigout as f32) - 46.85_f32
-}
+    fn raw_measurement_result(&mut self) -> Result<RawMeasurement, Error<E>>
+    {
+        self.read_value_checked().map(|(hi, lo)| RawMeasurement { hi, lo })
+    }
 
-/** 12 bits of humidity; cf. p. 15 of the datasheet. */
-#[inline(always)]
-fn calc_relative_humidity(lo: u8, hi: u8) -> f32
-{
-    let sigout = (hi as u16) << 8u16 | (lo as u16 & 0xf0_u16);
+    /**
+     * Read three bytes from I²C where the third byte is considered the CRC.
+     * Returns an error if this byte does not match the CRC computed from the
+     * first two bytes.
+     *
+     * When the CRC check succeeds, a pair holding the high and low byte is
+     * returned.
+     */
+    fn read_value_checked(&mut self) -> Result<(u8, u8), Error<E>>
+    {
+        let mut buf = [0; 3];
+        self.i2c.read(constants::I2C_ADDR, &mut buf).map_err(Error::I2c)?;
 
-    /* RH = -6 + 125 (S_RH/2^16) */
-    0.001907349_f32 * (sigout as f32) - 6.0_f32
+        if calc_crc(buf[0], buf[1]) != buf[2] {
+            Err(Error::Crc)
+        } else {
+            Ok((buf[0], buf[1]))
+        }
+    }
+
+    pub fn measure_temperature(
+        &mut self,
+        delay: &mut impl DelayUs<u16>,
+    ) -> Result<Temperature, Error<E>>
+    {
+        self.measure::<f32, { constants::TEMP_DELAY_MS }, {constants::I2C_COMMAND_TEMPERATURE}>(delay)
+    }
+
+    pub fn measure_humidity(
+        &mut self,
+        delay: &mut impl DelayUs<u16>,
+    ) -> Result<Humidity, Error<E>>
+    {
+        self.measure::<f32, { constants::HUMI_DELAY_MS }, {constants::I2C_COMMAND_HUMIDITY}>(delay)
+    }
+
+    fn start_measurement<const C: u8>(&mut self) -> Result<(), Error<E>>
+    {
+        self.send_command(C)
+    }
+
+    /**
+     * Read a sequence of bytes from a HTU21D sensor registers with the given
+     * delay between write and read operations.
+     */
+    fn measure<Output, const D: u16, const C: u8>(
+        &mut self,
+        delay: &mut impl DelayUs<u16>,
+    ) -> Result<Measurement<Output, D, C>, Error<E>>
+    where
+        Measurement<Output, D, C>: From<RawMeasurement>,
+    {
+        self.start_measurement::<C>()?;
+        delay.delay_us(D * 1000);
+        self.measurement_result::<Measurement<Output, D, C>>()
+    }
 }
 
 /**
@@ -153,16 +278,28 @@ mod tests
     #[test]
     fn humidity()
     {
+        use RawMeasurement as RM;
+
         /* 0x7c80 ⇒ 54.8 %RH */
-        assert_eq!(calc_relative_humidity(0x80, 0x7c), 54.791027);
+        assert_eq!(
+            Humidity::from(RM { lo: 0x80, hi: 0x7c }),
+            Measurement(54.791027)
+        );
         /* 0x4e85 ⇒ 32.3 %RH */
-        assert_eq!(calc_relative_humidity(0x85, 0x4e), 32.330086);
+        assert_eq!(
+            Humidity::from(RM { lo: 0x85, hi: 0x4e }),
+            Measurement(32.337715)
+        );
     }
 
     /** Page 15 in datasheet. */
     fn temp()
     {
+        use RawMeasurement as RM;
         /* 0x683a ⇒ 24.7 °C */
-        assert_eq!(calc_temperature(0x3a, 0x68), 24.7);
+        assert_eq!(
+            Temperature::from(RM { lo: 0x3a, hi: 0x68 }),
+            Measurement(24.7)
+        );
     }
 }
