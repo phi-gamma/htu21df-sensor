@@ -352,13 +352,14 @@ mod tests
     }
 
     /** Page 15 in datasheet. */
+    #[test]
     fn temp()
     {
         use RawMeasurement as RM;
         /* 0x683a ⇒ 24.7 °C */
         assert_eq!(
             Temperature::from(RM { lo: 0x3a, hi: 0x68 }),
-            Measurement(24.7)
+            Measurement(24.686394)
         );
     }
 }
