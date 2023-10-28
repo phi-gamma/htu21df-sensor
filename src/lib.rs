@@ -49,10 +49,14 @@ mod constants
     pub const CRC8_POLY: u32 = 0b100110001;
 }
 
+/**
+ * Struct representing an interface to the HTU21D(F) on the I²C bus.
+ */
 #[derive(Debug)]
 pub struct Sensor<I2C>
 {
-    i2c: I2C,
+    i2c:  I2C,
+    addr: u8,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -144,27 +148,45 @@ pub enum Error<I2cError>
 impl<I2C, E> Sensor<I2C>
 where I2C: Read<Error = E> + Write<Error = E>
 {
-    pub fn create(i2c: I2C) -> Self { Self { i2c } }
+    /**
+     * Create a new struct ``Sensor`` for the given I²C interface with the
+     * HTU21D listening on the default bus address.
+     *
+     * Cf. p. 10 of the datasheet.
+     */
+    pub fn create(i2c: I2C) -> Result<Self, Error<E>>
+    {
+        Ok(Self { i2c, addr: constants::I2C_ADDR })
+    }
 
+    /**
+     * Create a new struct ``Sensor`` for the given I²C interface with
+     * a custom bus address.
+     *
+     * Use this e. g. if you’ve resolved a bus address conflict with a
+     * multiplexer and the HTU21D is listening on a non-default address.
+     */
+    pub fn with_address(i2c: I2C, addr: u8) -> Result<Self, Error<E>>
+    {
+        Ok(Self { i2c, addr })
+    }
+
+    /**
+     * Issue commands to the HTU21D over I²C. ``cmd`` must be a valid command
+     * as describe in the datasheet.
+     */
     fn send_command<C: Into<u8>>(&mut self, cmd: C) -> Result<(), Error<E>>
     {
         let cmd: u8 = cmd.into();
-        self.i2c
-            .write(constants::I2C_ADDR, [cmd].as_slice())
-            .map_err(Error::I2c)
+        self.i2c.write(self.addr, [cmd].as_slice()).map_err(Error::I2c)
     }
 
-    pub fn reset(
-        &mut self,
-        delay: &mut impl DelayUs<u16>,
-    ) -> Result<(), Error<E>>
+    fn start_measurement<const C: u8>(&mut self) -> Result<(), Error<E>>
     {
-        self.send_command(Command::Reset)?;
-        delay.delay_us(constants::RESET_DELAY_MS * 1000);
-        Ok(())
+        self.send_command(C)
     }
 
-    pub fn measurement_result<M>(&mut self) -> Result<M, Error<E>>
+    fn measurement_result<M>(&mut self) -> Result<M, Error<E>>
     where M: From<RawMeasurement>
     {
         let raw = self.raw_measurement_result()?;
@@ -187,7 +209,7 @@ where I2C: Read<Error = E> + Write<Error = E>
     fn read_value_checked(&mut self) -> Result<(u8, u8), Error<E>>
     {
         let mut buf = [0; 3];
-        self.i2c.read(constants::I2C_ADDR, &mut buf).map_err(Error::I2c)?;
+        self.i2c.read(self.addr, &mut buf).map_err(Error::I2c)?;
 
         if calc_crc(buf[0], buf[1]) != buf[2] {
             Err(Error::Crc)
@@ -212,15 +234,27 @@ where I2C: Read<Error = E> + Write<Error = E>
         self.measure::<f32, { constants::HUMI_DELAY_MS }, {constants::I2C_COMMAND_HUMIDITY}>(delay)
     }
 
-    fn start_measurement<const C: u8>(&mut self) -> Result<(), Error<E>>
+    /**
+     * Send a soft reset command to the sensor and wait for the appropriate time
+     * for the device to initialize itself.
+     *
+     * Cf. p. 12 of the datasheet.
+     */
+    pub fn reset(
+        &mut self,
+        delay: &mut impl DelayUs<u16>,
+    ) -> Result<(), Error<E>>
     {
-        self.send_command(C)
+        self.send_command(Command::Reset)?;
+        delay.delay_us(constants::RESET_DELAY_MS * 1000);
+        Ok(())
     }
 
     /**
      * Read a sequence of bytes from a HTU21D sensor registers with the given
      * delay between write and read operations.
      */
+    #[inline]
     fn measure<Output, const D: u16, const C: u8>(
         &mut self,
         delay: &mut impl DelayUs<u16>,
