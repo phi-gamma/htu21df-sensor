@@ -9,7 +9,7 @@
  * Datasheet: https://cdn-shop.adafruit.com/datasheets/1899_HTU21D.pdf
  */
 
-use embedded_hal::blocking::{delay::DelayUs,
+use embedded_hal::blocking::{delay::DelayMs,
                              i2c::{Read, Write}};
 
 mod constants
@@ -43,7 +43,7 @@ mod constants
     pub const RESET_DELAY_MS: u16 = 15;
 
     /** wait for sensor to become ready */
-    pub const POWERUP_DELAY_MS: u8 = 15;
+    pub const POWERUP_DELAY_MS: u16 = 15;
 
     /** The checksum uses a 9-bit polynomial of 2^8 + 2^5 + 2^4 + 1. */
     pub const CRC8_POLY: u32 = 0b100110001;
@@ -150,25 +150,48 @@ where I2C: Read<Error = E> + Write<Error = E>
 {
     /**
      * Create a new struct ``Sensor`` for the given I²C interface with the
-     * HTU21D listening on the default bus address.
+     * HTU21D listening on the default bus address. If ``delay`` is passed,
+     * an initial reset is performed as recommended in the datasheet.
      *
      * Cf. p. 10 of the datasheet.
      */
-    pub fn create(i2c: I2C) -> Result<Self, Error<E>>
+    pub fn new(
+        i2c: I2C,
+        delay: Option<&mut impl DelayMs<u16>>,
+    ) -> Result<Self, Error<E>>
     {
-        Ok(Self { i2c, addr: constants::I2C_ADDR })
+        let mut htu = Self { i2c, addr: constants::I2C_ADDR };
+
+        if let Some(delay) = delay {
+            delay.delay_ms(constants::POWERUP_DELAY_MS);
+            htu.reset(delay)?;
+        }
+
+        Ok(htu)
     }
 
     /**
      * Create a new struct ``Sensor`` for the given I²C interface with
-     * a custom bus address.
+     * a custom bus address. If ``delay`` is passed, an initial reset is
+     * performed as recommended in the datasheet.
      *
      * Use this e. g. if you’ve resolved a bus address conflict with a
      * multiplexer and the HTU21D is listening on a non-default address.
      */
-    pub fn with_address(i2c: I2C, addr: u8) -> Result<Self, Error<E>>
+    pub fn with_address(
+        i2c: I2C,
+        delay: Option<&mut impl DelayMs<u16>>,
+        addr: u8,
+    ) -> Result<Self, Error<E>>
     {
-        Ok(Self { i2c, addr })
+        let mut htu = Self { i2c, addr };
+
+        if let Some(delay) = delay {
+            delay.delay_ms(constants::POWERUP_DELAY_MS);
+            htu.reset(delay)?;
+        }
+
+        Ok(htu)
     }
 
     /**
@@ -220,7 +243,7 @@ where I2C: Read<Error = E> + Write<Error = E>
 
     pub fn measure_temperature(
         &mut self,
-        delay: &mut impl DelayUs<u16>,
+        delay: &mut impl DelayMs<u16>,
     ) -> Result<Temperature, Error<E>>
     {
         self.measure::<f32, { constants::TEMP_DELAY_MS }, {constants::I2C_COMMAND_TEMPERATURE}>(delay)
@@ -228,7 +251,7 @@ where I2C: Read<Error = E> + Write<Error = E>
 
     pub fn measure_humidity(
         &mut self,
-        delay: &mut impl DelayUs<u16>,
+        delay: &mut impl DelayMs<u16>,
     ) -> Result<Humidity, Error<E>>
     {
         self.measure::<f32, { constants::HUMI_DELAY_MS }, {constants::I2C_COMMAND_HUMIDITY}>(delay)
@@ -242,11 +265,11 @@ where I2C: Read<Error = E> + Write<Error = E>
      */
     pub fn reset(
         &mut self,
-        delay: &mut impl DelayUs<u16>,
+        delay: &mut impl DelayMs<u16>,
     ) -> Result<(), Error<E>>
     {
         self.send_command(Command::Reset)?;
-        delay.delay_us(constants::RESET_DELAY_MS * 1000);
+        delay.delay_ms(constants::RESET_DELAY_MS);
         Ok(())
     }
 
@@ -257,13 +280,13 @@ where I2C: Read<Error = E> + Write<Error = E>
     #[inline]
     fn measure<Output, const D: u16, const C: u8>(
         &mut self,
-        delay: &mut impl DelayUs<u16>,
+        delay: &mut impl DelayMs<u16>,
     ) -> Result<Measurement<Output, D, C>, Error<E>>
     where
         Measurement<Output, D, C>: From<RawMeasurement>,
     {
         self.start_measurement::<C>()?;
-        delay.delay_us(D * 1000);
+        delay.delay_ms(D);
         self.measurement_result::<Measurement<Output, D, C>>()
     }
 }
