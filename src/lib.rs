@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: MIT */
+
 #![allow(unused)]
 #![deny(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
