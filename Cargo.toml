@@ -10,7 +10,4 @@ description             = "support for MEAS HTU21D(F) temperature + humidity sen
 keywords                = ["htu21d", "temperature", "humidity", "embedded-hal"]
 
 [dependencies]
-embedded-hal            = "*"
-
-[dev-dependencies]
-embedded-hal-mock       = "*"
+embedded-hal            = "0.2"
