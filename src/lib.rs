@@ -173,6 +173,15 @@ where I2C: Read<Error = E> + Write<Error = E>
     }
 
     /**
+     * Release the owned I²C device by consuming ``self``.
+     *
+     * This can be useful for sharing the same bus between multiple
+     * drivers manually without resorting to a manager like the
+     * [``shared-bus``](https://docs.rs/shared-bus) crate.
+     */
+    pub fn destroy(self) -> I2C { self.i2c }
+
+    /**
      * Create a new struct ``Sensor`` for the given I²C interface with
      * a custom bus address. If ``delay`` is passed, an initial reset is
      * performed as recommended in the datasheet.
