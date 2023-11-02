@@ -2,13 +2,22 @@
 
 #![allow(unused)]
 #![deny(unsafe_code)]
+#![deny(missing_docs)]
 #![cfg_attr(not(test), no_std)]
 
 /*!
- * HTU21D(F) temperature / humidity sensor by TE MEAS as found in
- * components like the GY-21.
+ * # About
  *
- * Datasheet: https://cdn-shop.adafruit.com/datasheets/1899_HTU21D.pdf
+ * This is a Rust driver for the * HTU21D(F) temperature / humidity sensor
+ * by TE MEAS found in widely available sensor components. It was tested on
+ * GY-21 sensor but should work with different HTU21 based sensors too.
+ *
+ * The implementation is based on [the official datasheet by TE
+ * MEAS](https://cdn-shop.adafruit.com/datasheets/1899_HTU21D.pdf).
+ *
+ * # Implementation notes
+ *
+ * As of version 0.1 only blocking APIs are provided.
  */
 
 use embedded_hal::blocking::{delay::DelayMs,
@@ -32,10 +41,10 @@ mod constants
     pub const SOFT_RESET: u8 = 0xfe;
 
     /** wait before reading temperature */
-    pub const TEMP_DELAY_MS: u16 = 50;
+    pub const TEMPERATURE_DELAY_MS: u16 = 50;
 
     /** wait before reading humidity */
-    pub const HUMI_DELAY_MS: u16 = 16;
+    pub const HUMIDITY_DELAY_MS: u16 = 16;
 
     /**
      * Wait after resetting the sensor (power cycle and reinitialization).
@@ -61,13 +70,8 @@ pub struct Sensor<I2C>
     addr: u8,
 }
 
-#[derive(Copy, Clone, Debug)]
-#[repr(u8)]
-enum Command
-{
-    Reset = constants::SOFT_RESET,
-}
-
+/** Two bytes read from I²C bus representing a measurement. Values are
+ * provided in big endian order. */
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct RawMeasurement
 {
@@ -75,17 +79,24 @@ pub struct RawMeasurement
     hi: u8,
 }
 
+/** Two constants are required to perform a measurement: the command or register
+ * address ``C`` and the delay ``D`` in ms from initiating the measurement to
+ * reading the result. Both values are different for temperature and relative
+ * humidity on the HTU21. */
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Measurement<Output, const D: u16, const C: u8>(Output);
 
+/** A type defining the measurement for relative humidity. */
 pub type Humidity = Measurement<
     f32,
-    { constants::HUMI_DELAY_MS },
+    { constants::HUMIDITY_DELAY_MS },
     { constants::I2C_COMMAND_HUMIDITY },
 >;
+
+/** A type defining the measurement for temperature. */
 pub type Temperature = Measurement<
     f32,
-    { constants::TEMP_DELAY_MS },
+    { constants::TEMPERATURE_DELAY_MS },
     { constants::I2C_COMMAND_TEMPERATURE },
 >;
 
@@ -95,6 +106,7 @@ impl<Output: Copy, const D: u16, const C: u8> Measurement<Output, D, C>
 
     const fn delay_ms(&self) -> u16 { D }
 
+    /** Access the output value of a measurement. */
     pub const fn value(&self) -> Output { self.0 }
 }
 
@@ -130,20 +142,14 @@ impl From<RawMeasurement> for Humidity
     }
 }
 
-impl From<Command> for u8
-{
-    fn from(cmd: Command) -> Self
-    {
-        match cmd {
-            Command::Reset => constants::SOFT_RESET,
-        }
-    }
-}
-
+/** Error conditions returned from struct ``Sensor`` member functions. */
 #[derive(Copy, Clone, Debug)]
 pub enum Error<I2cError>
 {
+    /** ``I2c`` wraps I²C errors. */
     I2c(I2cError),
+
+    /** ``Crc`` indicates a corrupt reading. */
     Crc,
 }
 
@@ -215,12 +221,32 @@ where I2C: Read<Error = E> + Write<Error = E>
         self.i2c.write(self.addr, [cmd].as_slice()).map_err(Error::I2c)
     }
 
-    fn start_measurement<const C: u8>(&mut self) -> Result<(), Error<E>>
+    /**
+     * Initiate a measurement of a particular type.
+     *
+     * This will return immediately after submitting the measurement command
+     * over I²C without waiting for the sensor to become ready for reading
+     * the result. It can be used paired with ``measurement_result()`` to
+     * implement non-blocking APIs. */
+    pub fn start_measurement<const C: u8>(&mut self) -> Result<(), Error<E>>
     {
         self.send_command(C)
     }
 
-    fn measurement_result<M>(&mut self) -> Result<M, Error<E>>
+    /**
+     * Read a value for which a measurement has been initiated.
+     *
+     * This will return immediately after reading the value from the
+     * I²C without waiting for the sensor to become ready first.
+     * It can be used together with ``start_measurement()`` to implement
+     * non-blocking APIs.
+     *
+     * Note that this API provides no safeguards against conflating
+     * measurement types or insufficient delay since initiating the
+     * measurement. Ensuring read readiness of the sensor is up to
+     * caller.
+     */
+    pub fn measurement_result<M>(&mut self) -> Result<M, Error<E>>
     where M: From<RawMeasurement>
     {
         let raw = self.raw_measurement_result()?;
@@ -252,20 +278,24 @@ where I2C: Read<Error = E> + Write<Error = E>
         }
     }
 
+    /** Perform one blocking temperature measurement for the given measurement
+     * type, waiting the appropriate amount of time before reading the value. */
     pub fn measure_temperature(
         &mut self,
         delay: &mut impl DelayMs<u16>,
     ) -> Result<Temperature, Error<E>>
     {
-        self.measure::<f32, { constants::TEMP_DELAY_MS }, {constants::I2C_COMMAND_TEMPERATURE}>(delay)
+        self.measure::<f32, { constants::TEMPERATURE_DELAY_MS }, {constants::I2C_COMMAND_TEMPERATURE}>(delay)
     }
 
+    /** Perform one blocking humidity measurement for the given measurement
+     * type, waiting the appropriate amount of time before reading the value. */
     pub fn measure_humidity(
         &mut self,
         delay: &mut impl DelayMs<u16>,
     ) -> Result<Humidity, Error<E>>
     {
-        self.measure::<f32, { constants::HUMI_DELAY_MS }, {constants::I2C_COMMAND_HUMIDITY}>(delay)
+        self.measure::<f32, { constants::HUMIDITY_DELAY_MS }, {constants::I2C_COMMAND_HUMIDITY}>(delay)
     }
 
     /**
@@ -279,7 +309,7 @@ where I2C: Read<Error = E> + Write<Error = E>
         delay: &mut impl DelayMs<u16>,
     ) -> Result<(), Error<E>>
     {
-        self.send_command(Command::Reset)?;
+        self.send_command(constants::SOFT_RESET)?;
         delay.delay_ms(constants::RESET_DELAY_MS);
         Ok(())
     }
