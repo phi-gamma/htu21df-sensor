@@ -1,6 +1,6 @@
 [package]
 name                    = "htu21df-sensor"
-version                 = "0.1.1"
+version                 = "0.1.2"
 authors                 = ["Philipp Gesang <phg@phi-gamma.net>"]
 edition                 = "2021"
 license                 = "MIT"
