@@ -15,6 +15,53 @@
  * The implementation is based on [the official datasheet by TE
  * MEAS](https://cdn-shop.adafruit.com/datasheets/1899_HTU21D.pdf).
  *
+ * # Example performing measurements with the HTU21D on the ESP32
+ *
+ * In this example only the HTU21 (GY-21) is accessed over I²C but since
+ * in a real-world application that is unlikely to be the only slave
+ * device on the bus, the I²C struct is wrapped with the
+ * [``shared-bus``](https://docs.rs/shared-bus) crate.
+ *
+ * ```no_run
+ *  use esp_println::{print, println};
+ *  use hal::{clock::ClockControl, gpio::IO, i2c::I2C, peripherals::Peripherals,
+ *            prelude::*, Delay};
+ *  use htu21df_sensor::Sensor;
+ *
+ *  // set up clock and delay handle to ensure the proper duration between
+ *  // measurement initiation and reading the result
+ *  let clocks = ClockControl::max(system.clock_control).freeze();
+ *  let mut delay = Delay::new(&clocks);
+ *
+ *  // initialize I²C with the default GPIO pins on ESP32
+ *  let i2c = I2C::new(
+ *      peripherals.I2C0,
+ *      io.pins.gpio21,
+ *      io.pins.gpio22,
+ *      100u32.kHz(),
+ *      /* TODO: this will go away soon */
+ *      &mut system.peripheral_clock_control,
+ *      &clocks,
+ *  );
+ *
+ *  // wait for the sensor to become live; the 15 are suggested in the datasheet
+ *  delay.delay_ms(15);
+ *
+ *  // no need to own the I²C bus
+ *  let bus = shared_bus::BusManagerSimple::new(i2c);
+ *
+ *  // finally, initialize the sensor
+ *  println!("initializing HTU21D ...");
+ *  let mut htu = Sensor::new(bus.acquire_i2c(), Some(&mut delay)).expect("sensor init");
+ *
+ *  // the sensor is now ready to use
+ *  print!("measuring ...");
+ *  let humidity: f32 = htu.measure_humidity(&mut delay).expect("humidity").value();
+ *  let temperature: f32 = htu.measure_temperature(&mut delay).expect("temperature").value();
+ *
+ *  println!(" done. temperature: {} °C, rel. humidity: {} %", temperature, humidity);
+ * ```
+ *
  * # Implementation notes
  *
  * As of version 0.1 only blocking APIs are provided.
