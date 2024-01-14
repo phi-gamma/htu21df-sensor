@@ -3,7 +3,7 @@
 #![allow(unused)]
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 /*!
  * # About
@@ -69,6 +69,8 @@
 
 use embedded_hal::blocking::{delay::DelayMs,
                              i2c::{Read, Write}};
+
+#[cfg(feature = "std")] mod std;
 
 mod constants
 {

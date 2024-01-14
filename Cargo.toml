@@ -11,3 +11,7 @@ keywords                = ["htu21d", "temperature", "humidity", "embedded-hal"]
 
 [dependencies]
 embedded-hal            = "0.2"
+
+[features]
+default = []
+std = []
