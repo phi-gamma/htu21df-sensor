@@ -22,7 +22,7 @@
  * device on the bus, the I²C struct is wrapped with the
  * [``shared-bus``](https://docs.rs/shared-bus) crate.
  *
- * ```no_run
+ * ```ignore
  *  use esp_println::{print, println};
  *  use hal::{clock::ClockControl, gpio::IO, i2c::I2C, peripherals::Peripherals,
  *            prelude::*, Delay};
