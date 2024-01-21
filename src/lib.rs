@@ -8,7 +8,7 @@
 /*!
  * # About
  *
- * This is a Rust driver for the * HTU21D(F) temperature / humidity sensor
+ * This is a Rust driver for the *HTU21D(F)* temperature / humidity sensor
  * by TE MEAS found in widely available sensor components. It was tested on
  * GY-21 sensor but should work with different HTU21 based sensors too.
  *
